@@ -57,7 +57,20 @@
         </section>
 
         <section class="game-area">
+            <div class="pilot-name-bar" id="pilotNameBar">
+                <label class="pilot-name-label" for="pilotNameInput">// PILOTO</label>
+                <input
+                    id="pilotNameInput"
+                    class="pilot-name-input"
+                    type="text"
+                    maxlength="18"
+                    autocomplete="nickname"
+                    placeholder="Nome para ranking (obrigatório)"
+                    aria-label="Nome do piloto"
+                />
+            </div>
             <canvas id="game" width="1100" height="720" tabindex="0"></canvas>
+            <input type="file" id="rankingImportInput" accept="application/json,.json" hidden>
         </section>
 
         <section class="console-panel">

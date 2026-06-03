@@ -60,7 +60,8 @@ const Game = {
     UPGRADE_CHALLENGE_TIME:          12.0,
     UPGRADE_CHALLENGE_FEEDBACK_TIME: 1.25,
 
-    RANKING_STORAGE_KEY: "logicInvadersRankingV1",
+    RANKING_STORAGE_KEY: "logicInvadersRankingV2",
+    LAST_PILOT_STORAGE_KEY: "logicInvadersLastPilot",
     MAX_RANKING_ENTRIES: 8,
     MAX_RANKING_STORED_ENTRIES: 40,
 
@@ -129,8 +130,14 @@ const Game = {
     rankingStore:      null,
     rankingStatus:     "Ranking local deste navegador.",
     rankingSortMode:   "score",
+    rankingShowAssist: false,
+    rankingLastSubmitMessage: "",
+    rankingToolbarIndex: 0,
+    pilotNameError:    "",
     assistMode:        false,
     campaignTimeSeconds: 0,
+    fullCampaignTimeSeconds: 0,
+    logicErrorsThisRun: 0,
 
     enemiesKilledThisLevel: 0,
     totalEnemiesThisLevel:  8,
@@ -146,8 +153,8 @@ const Game = {
     transitionTimer:   0,
     transitionMessage: "",
     campaignCheckpointIndex: 0,
-    rankingQualified: false,
-    rankingEntrySubmitted: false,
+    rankingSubmittedThisRun: false,
+    firstPartCheckpointReached: false,
 
     // NOVO: estado do mini-jogo acionado por upgrade especial.
     upgradeChallenge: null,
@@ -208,6 +215,11 @@ const Game = {
 
         this.spawner       = new EnemySpawner(this.canvas);
         this.powerups      = new PowerupSpawner(this.canvas);
+        this.pilotNameInput    = document.getElementById("pilotNameInput");
+        this.pilotNameBar      = document.getElementById("pilotNameBar");
+        this.rankingImportInput = document.getElementById("rankingImportInput");
+        this._bindPilotNameAndRankingImport();
+
         this.rankingStore   = this._createRankingStore();
         this.rankingEntries = this._loadRanking();
         this._syncRanking();
@@ -283,9 +295,13 @@ const Game = {
         this.isFinalWaveStarted     = false;
         this.pauseUses       = 0;
         this.campaignCheckpointIndex = 0;
-        this.rankingQualified = false;
-        this.rankingEntrySubmitted = false;
+        this.rankingSubmittedThisRun = false;
+        this.firstPartCheckpointReached = false;
+        this.rankingLastSubmitMessage = "";
         this.campaignTimeSeconds = 0;
+        this.fullCampaignTimeSeconds = 0;
+        this.logicErrorsThisRun = 0;
+        this.pilotNameError = "";
         this.slowmoTimer     = 0;
         this.slowmoMessage   = "";
         this.screenShake     = 0;
@@ -306,6 +322,8 @@ const Game = {
 
         if (this.hud.gameOver) this.hud.gameOver.classList.add("hidden");
 
+        this._setPilotNameBarVisible(true);
+        this._restorePilotNameInput();
         Input.clearEdgeFlags();
         this._refreshHud();
     },
@@ -331,20 +349,55 @@ const Game = {
         }
     },
 
-    _requestPlayerNameAndStart(assistMode = false) {
-        const requestedAssistMode = Boolean(assistMode);
-        const defaultName = this.lastEnteredName || this.currentPlayerName || "";
-        let name = window.prompt("Digite o nome do piloto:", defaultName);
-
-        // Repete se string for vazia (mas permite cancelar com null)
-        while (name !== null && !name.trim()) {
-            name = window.prompt("Digite o nome do piloto:", defaultName);
+    _bindPilotNameAndRankingImport() {
+        if (this.rankingImportInput) {
+            this.rankingImportInput.addEventListener("change", (e) => {
+                const file = e.target.files && e.target.files[0];
+                if (file) this._importRankingFile(file);
+                e.target.value = "";
+            });
         }
-        if (name === null) return;
+    },
 
-        this.currentPlayerName = name.trim().slice(0, 18);
-        this.lastEnteredName   = this.currentPlayerName;
-        this._startGame(requestedAssistMode);
+    _setPilotNameBarVisible(visible) {
+        if (!this.pilotNameBar) return;
+        this.pilotNameBar.classList.toggle("is-hidden", !visible);
+    },
+
+    _restorePilotNameInput() {
+        if (!this.pilotNameInput) return;
+        try {
+            const saved = localStorage.getItem(this.LAST_PILOT_STORAGE_KEY) || "";
+            if (saved) this.pilotNameInput.value = saved;
+        } catch (err) { /* ignore */ }
+    },
+
+    _readPilotNameFromInput() {
+        const raw = this.pilotNameInput
+            ? this.pilotNameInput.value
+            : (this.currentPlayerName || this.lastEnteredName || "");
+        return String(raw || "").trim().slice(0, 18);
+    },
+
+    _persistPilotName(name) {
+        this.currentPlayerName = name;
+        this.lastEnteredName   = name;
+        if (this.pilotNameInput) this.pilotNameInput.value = name;
+        try {
+            localStorage.setItem(this.LAST_PILOT_STORAGE_KEY, name);
+        } catch (err) { /* ignore */ }
+    },
+
+    _startFromMenu(assistMode = false) {
+        const name = this._readPilotNameFromInput();
+        if (!name) {
+            this.pilotNameError = "Digite um nome de piloto para jogar.";
+            if (this.pilotNameInput) this.pilotNameInput.focus();
+            return;
+        }
+        this.pilotNameError = "";
+        this._persistPilotName(name);
+        this._startGame(Boolean(assistMode));
     },
 
     _startGame(assistMode = this.assistMode) {
@@ -352,12 +405,14 @@ const Game = {
         this._clearLog();
         this._log(`Sistema online. Boa sorte, ${this.currentPlayerName || "piloto"}.`, "info");
         if (this.assistMode) {
-            this._log("Modo assistido ativo: alvos corretos serão sinalizados. Pontuação não entra no ranking.", "system");
+            this._log("Modo assistido: alvos sinalizados; runs vão ao ranking de prática.", "system");
         }
 
         this.lives           = this.INITIAL_LIVES;
         this.score           = 0;
         this.campaignTimeSeconds = 0;
+        this.fullCampaignTimeSeconds = 0;
+        this.logicErrorsThisRun = 0;
         this.bullets         = [];
         this.floatTexts      = [];
         this.screenShake     = 0;
@@ -367,13 +422,17 @@ const Game = {
         this.impossibleTimer = 0;
         this.pauseUses       = 0;
         this.campaignCheckpointIndex = 0;
-        this.rankingQualified = false;
-        this.rankingEntrySubmitted = false;
+        this.rankingSubmittedThisRun = false;
+        this.firstPartCheckpointReached = false;
+        this.rankingLastSubmitMessage = "";
         this.sessionNotice   = "";
         this.sessionNoticeTimer = 0;
         this.upgradeChallenge = null;
 
         this._setSentenceObscured(false);
+        this._setPilotNameBarVisible(false);
+        this.logicErrorsThisRun = 0;
+        this.fullCampaignTimeSeconds = 0;
 
         this.player = new Player(
             this.canvas.width / 2,
@@ -846,10 +905,7 @@ const Game = {
     },
 
     _completeCampaign() {
-        if (this.level >= this.FIRST_CAMPAIGN_PART_LEVEL) {
-            this.rankingQualified = true;
-        }
-        this._submitRankingIfEligible();
+        this._trySubmitRanking();
         this.state = "gameover";
         this._setSentenceObscured(false);
         this._configureEndOverlay("victory");
@@ -860,9 +916,7 @@ const Game = {
     },
 
     _startCampaignCheckpoint() {
-        this.rankingQualified = true;
-        this._submitRankingIfEligible();
-
+        this.firstPartCheckpointReached = true;
         this.state = "campaigncheckpoint";
         this.campaignCheckpointIndex = 0;
         this.transitionMessage = "PRIMEIRA PARTE DA CAMPANHA FINALIZADA";
@@ -881,7 +935,9 @@ const Game = {
     },
 
     _stopAfterCampaignCheckpoint() {
+        this._trySubmitRanking();
         this.state = "gameover";
+        this._setPilotNameBarVisible(true);
         this._setSentenceObscured(false);
         this._configureEndOverlay("firstPart");
         if (this.hud.finalScore) this.hud.finalScore.textContent = this.score;
@@ -895,7 +951,7 @@ const Game = {
         if (!this.spawner.isAllSpawned())    return;
         if (this.spawner.aliveCount() > 0)   return;
 
-        if (this.level === this.FIRST_CAMPAIGN_PART_LEVEL && !this.rankingQualified) {
+        if (this.level === this.FIRST_CAMPAIGN_PART_LEVEL && !this.firstPartCheckpointReached) {
             this._startCampaignCheckpoint();
             return;
         }
@@ -1129,9 +1185,9 @@ const Game = {
        ============================================================ */
     _menuItems() {
         return [
-            { label: "▶  JOGAR NORMAL",    action: () => this._requestPlayerNameAndStart(false) },
-            { label: "◎  MODO ASSISTIDO",  action: () => this._requestPlayerNameAndStart(true) },
-            { label: "🏆  RANKING",        action: () => { this.state = "ranking"; } },
+            { label: "▶  JOGAR NORMAL",    action: () => this._startFromMenu(false) },
+            { label: "◎  MODO ASSISTIDO",  action: () => this._startFromMenu(true) },
+            { label: "🏆  RANKING",        action: () => this._openRankingScreen() },
             { label: "📖  REGRAS",        action: () => { this._cameFromPause = false; this.state = "rules"; } },
             { label: "🎮  CONTROLES",     action: () => { this.state = "controls"; } }
         ];
@@ -1200,23 +1256,38 @@ const Game = {
         }
     },
 
-    _rankingSortBtnRect() {
-        return {
-            x: this.canvas.width - 330,
-            y: 116,
-            w: 250,
-            h: 38
-        };
-    },
-
     _updateRankingScreen(escPressed) {
         if (escPressed || this._clickInRect(this._backBtnRect())) {
             this.state = "menu";
+            this._setPilotNameBarVisible(true);
             return;
         }
 
-        if (Input.consumeEnter() || this._clickInRect(this._rankingSortBtnRect())) {
-            this.rankingSortMode = this.rankingSortMode === "score" ? "time" : "score";
+        const items = this._rankingToolbarItems();
+        const rects = this._rankingToolbarRects();
+
+        if (Input.consumeUp()) {
+            this.rankingToolbarIndex = (this.rankingToolbarIndex - 1 + items.length) % items.length;
+        }
+        if (Input.consumeDown()) {
+            this.rankingToolbarIndex = (this.rankingToolbarIndex + 1) % items.length;
+        }
+
+        if (Input.consumeEnter()) {
+            this._activateRankingToolbar(items[this.rankingToolbarIndex].id);
+            return;
+        }
+
+        for (let i = 0; i < items.length; i++) {
+            const rect = rects[items[i].id];
+            if (this._pointInRect(this.mouseX, this.mouseY, rect)) {
+                this.rankingToolbarIndex = i;
+                if (this.mouseClick) {
+                    this._activateRankingToolbar(items[i].id);
+                    this.mouseClick = false;
+                    return;
+                }
+            }
         }
     },
 
@@ -1286,9 +1357,10 @@ const Game = {
     },
 
     _tickCampaignTime(dt) {
-        if (this.rankingEntrySubmitted) return;
-        if (this.level > this.FIRST_CAMPAIGN_PART_LEVEL) return;
-        this.campaignTimeSeconds += Math.max(0, dt);
+        if (this.state !== "playing") return;
+        const delta = Math.max(0, dt);
+        this.fullCampaignTimeSeconds += delta;
+        this.campaignTimeSeconds += delta;
     },
 
 
@@ -1404,6 +1476,7 @@ const Game = {
             this._log(`✔ ACERTO  ${detail}`, "success");
         } else {
             enemy.hit();
+            this.logicErrorsThisRun += 1;
             this._addFloat("ERRO!", enemy.x, enemy.y, "#FF2E88");
             this._log(`✘ ERRO LÓGICO  ${detail}`, "error");
 
@@ -1439,8 +1512,9 @@ const Game = {
     },
 
     _gameOver() {
-        this._submitRankingIfEligible();
+        this._trySubmitRanking();
         this.state = "gameover";
+        this._setPilotNameBarVisible(true);
         this._setSentenceObscured(false);
         this._configureEndOverlay("failure");
         if (this.hud.finalScore) this.hud.finalScore.textContent = this.score;
@@ -1451,26 +1525,41 @@ const Game = {
 
 
     /* ============================================================
-       Ranking (local + online configuravel)
+       Ranking geral (local + online)
        ============================================================ */
     _createRankingStore() {
         if (typeof LogicInvadersRankingStore !== "function") {
-            this.rankingStatus = "Ranking local deste navegador.";
+            this.rankingStatus = "Ranking indisponível.";
             return null;
         }
 
         const store = new LogicInvadersRankingStore({
             storageKey: this.RANKING_STORAGE_KEY,
             maxEntries: this.MAX_RANKING_STORED_ENTRIES,
-            minCompletedLevel: this.FIRST_CAMPAIGN_PART_LEVEL,
+            minScore: 1,
             config: window.LOGIC_INVADERS_RANKING || {}
         });
 
-        this.rankingStatus = store.isRemoteEnabled()
-            ? "Ranking online sincronizado."
-            : "Ranking local deste navegador.";
-
+        this._refreshRankingStatus(store);
         return store;
+    },
+
+    _refreshRankingStatus(store = this.rankingStore) {
+        if (!store) {
+            this.rankingStatus = "Ranking indisponível.";
+            return;
+        }
+        const mode = store.modeLabel();
+        this.rankingStatus = store.isRemoteEnabled()
+            ? `Ranking ${mode} — sincronizado.`
+            : `Ranking ${mode} — use Exportar/Importar para compartilhar.`;
+    },
+
+    _openRankingScreen() {
+        this.state = "ranking";
+        this.rankingToolbarIndex = 0;
+        this._setPilotNameBarVisible(false);
+        this._syncRanking();
     },
 
     async _syncRanking() {
@@ -1480,131 +1569,219 @@ const Game = {
         if (wasRemote) this.rankingStatus = "Sincronizando ranking online...";
 
         this.rankingEntries = await this.rankingStore.load();
-        this.rankingStatus = wasRemote
-            ? "Ranking online sincronizado."
-            : "Ranking local deste navegador.";
+        this._refreshRankingStatus();
     },
 
     _loadRanking() {
-        if (this.rankingStore) {
-            return this.rankingStore.loadLocal();
-        }
-
-        try {
-            const raw = localStorage.getItem(this.RANKING_STORAGE_KEY);
-            const parsed = raw ? JSON.parse(raw) : [];
-            if (!Array.isArray(parsed)) return [];
-            return parsed
-                .filter(entry =>
-                    entry &&
-                    typeof entry.name  === "string" &&
-                    typeof entry.score === "number" &&
-                    typeof entry.level === "number" &&
-                    entry.level >= this.FIRST_CAMPAIGN_PART_LEVEL
-                )
-                .map(entry => ({
-                    ...entry,
-                    timeSeconds: Number.isFinite(Number(entry.timeSeconds))
-                        ? Number(entry.timeSeconds)
-                        : null
-                }))
-                .sort((a, b) => this._compareRankingByScore(a, b))
-                .slice(0, this.MAX_RANKING_STORED_ENTRIES);
-        } catch (err) {
-            console.warn("Falha ao carregar ranking:", err);
-            return [];
-        }
+        return this.rankingStore
+            ? this.rankingStore.loadLocal()
+            : [];
     },
 
-    _saveRanking() {
-        if (this.rankingStore) {
-            this.rankingStore.saveLocal(this.rankingEntries);
-            return;
-        }
-
-        try {
-            localStorage.setItem(
-                this.RANKING_STORAGE_KEY,
-                JSON.stringify(this.rankingEntries.slice(0, this.MAX_RANKING_STORED_ENTRIES))
-            );
-        } catch (err) {
-            console.warn("Falha ao salvar ranking:", err);
-        }
-    },
-
-    _submitRankingIfEligible() {
-        if (this.rankingEntrySubmitted) return;
-        if (!this.rankingQualified || this.level < this.FIRST_CAMPAIGN_PART_LEVEL) return;
-
-        if (this.assistMode) {
-            this.rankingEntrySubmitted = true;
-            this._log("Primeira parte concluída no modo assistido; ranking não foi alterado.", "info");
-            return;
-        }
-
-        this.rankingEntrySubmitted = true;
-        this._addRankingEntry(this.FIRST_CAMPAIGN_PART_LEVEL);
-    },
-
-    _addRankingEntry(entryLevel = this.level) {
-        const entry = {
-            name:  this.currentPlayerName || "PILOTO",
+    _buildRankingEntry() {
+        return {
+            name: this.currentPlayerName || "PILOTO",
             score: this.score,
-            level: entryLevel,
-            timeSeconds: Math.max(0, Math.round(this.campaignTimeSeconds)),
-            date:  new Date().toISOString().slice(0, 10)
+            level: this.level,
+            timeSeconds: Math.max(0, Math.round(this.fullCampaignTimeSeconds)),
+            assistMode: this.assistMode,
+            logicErrors: this.logicErrorsThisRun,
+            livesRemaining: this.lives,
+            dateISO: new Date().toISOString()
         };
+    },
 
-        if (this.rankingStore) {
-            const wasRemote = this.rankingStore.isRemoteEnabled();
-            this.rankingEntries = [...this.rankingEntries, entry]
-                .sort((a, b) => this._compareRankingByScore(a, b))
-                .slice(0, this.MAX_RANKING_STORED_ENTRIES);
-            this.rankingStatus = wasRemote
-                ? "Salvando pontuação no ranking online..."
-                : "Pontuação salva no ranking local.";
+    _rankingPosition(entry) {
+        const board = this._sortedRankingEntries();
+        const index = board.findIndex(item => item.runId === entry.runId);
+        return index >= 0 ? index + 1 : null;
+    },
 
-            this.rankingStore.add(entry).then(entries => {
-                this.rankingEntries = entries;
-                this.rankingStatus = wasRemote
-                    ? "Ranking online sincronizado."
-                    : "Pontuação salva no ranking local.";
-            });
+    _formatRankingSubmitMessage(result, entry) {
+        const boardLabel = entry.assistMode ? "ranking de prática" : "ranking geral";
+
+        if (result === "rejected") {
+            if (entry.score < 1) {
+                return "Pontuação 0 — não entrou no ranking (mínimo 1 ponto).";
+            }
+            return "Não foi possível registrar no ranking.";
+        }
+        if (result === "added") {
+            const pos = this._rankingPosition(entry);
+            const posText = pos ? ` — ${pos}º lugar` : "";
+            return `${entry.score} pts no nível ${entry.level} entrou no ${boardLabel}${posText}!`;
+        }
+        if (result === "not_ranked") {
+            return `${entry.score} pts no nível ${entry.level} ficou fora do top ${this.MAX_RANKING_STORED_ENTRIES} do ${boardLabel}.`;
+        }
+        return `Partida registrada no ${boardLabel}.`;
+    },
+
+    _applyRankingSubmit(payload, entry) {
+        if (payload && Array.isArray(payload.entries)) {
+            this.rankingEntries = payload.entries;
+        }
+        this.rankingLastSubmitMessage = this._formatRankingSubmitMessage(payload.result, entry);
+        this._refreshRankingStatus();
+
+        const logType = payload.result === "rejected"
+            ? "error"
+            : (payload.result === "not_ranked" ? "info" : "success");
+        this._log(this.rankingLastSubmitMessage, logType);
+
+        if (payload.result === "added") {
+            const label = entry.assistMode ? "PRÁTICA" : "GERAL";
+            this._showNotice(`NO TOP — RANKING ${label}`, "#00FFCC", 3.2);
+        }
+    },
+
+    _trySubmitRanking() {
+        if (this.rankingSubmittedThisRun) return;
+        this.rankingSubmittedThisRun = true;
+
+        const entry = this._buildRankingEntry();
+        if (!this.rankingStore) {
+            this.rankingLastSubmitMessage = "Ranking indisponível neste navegador.";
+            this._log(this.rankingLastSubmitMessage, "error");
             return;
         }
 
-        this.rankingEntries.push(entry);
-        this.rankingEntries.sort((a, b) => this._compareRankingByScore(a, b));
-        this.rankingEntries = this.rankingEntries.slice(0, this.MAX_RANKING_STORED_ENTRIES);
-        this._saveRanking();
+        if (entry.score < 1) {
+            this.rankingLastSubmitMessage = this._formatRankingSubmitMessage("rejected", entry);
+            this._log(this.rankingLastSubmitMessage, "info");
+            return;
+        }
+
+        const wasRemote = this.rankingStore.isRemoteEnabled();
+        this.rankingStatus = wasRemote
+            ? "Salvando pontuação no ranking online..."
+            : "Salvando pontuação no ranking local...";
+
+        this.rankingStore.add(entry).then(payload => {
+            this._applyRankingSubmit(payload, entry);
+        });
     },
 
-    _entryTimeSeconds(entry) {
-        const value = Number(entry && entry.timeSeconds);
-        return Number.isFinite(value) && value >= 0 ? value : Infinity;
-    },
-
-    _compareRankingByScore(a, b) {
-        if (b.score !== a.score) return b.score - a.score;
-        const timeDiff = this._entryTimeSeconds(a) - this._entryTimeSeconds(b);
-        if (timeDiff !== 0) return timeDiff;
-        return String(a.date || "").localeCompare(String(b.date || ""));
-    },
-
-    _compareRankingByTime(a, b) {
-        const timeDiff = this._entryTimeSeconds(a) - this._entryTimeSeconds(b);
-        if (timeDiff !== 0) return timeDiff;
-        if (b.score !== a.score) return b.score - a.score;
-        return String(a.date || "").localeCompare(String(b.date || ""));
+    _filteredRankingEntries() {
+        if (typeof LogicInvadersRankingStore.filterEntries !== "function") {
+            return this.rankingEntries;
+        }
+        return LogicInvadersRankingStore.filterEntries(this.rankingEntries, {
+            showAssist: this.rankingShowAssist
+        });
     },
 
     _sortedRankingEntries() {
         const compare = this.rankingSortMode === "time"
-            ? (a, b) => this._compareRankingByTime(a, b)
-            : (a, b) => this._compareRankingByScore(a, b);
-        return [...this.rankingEntries]
+            ? LogicInvadersRankingStore.compareByTime
+            : LogicInvadersRankingStore.compareByScore;
+        return this._filteredRankingEntries()
             .sort(compare)
             .slice(0, this.MAX_RANKING_ENTRIES);
+    },
+
+    _isCurrentPilotEntry(entry) {
+        const key = LogicInvadersRankingStore.pilotKey(this.currentPlayerName || this._readPilotNameFromInput());
+        return entry.pilotKey === key || entry.name === this.currentPlayerName;
+    },
+
+    _rankingToolbarItems() {
+        return [
+            {
+                id: "sort",
+                label: this.rankingSortMode === "score" ? "ORDENAR: TEMPO" : "ORDENAR: PONTOS"
+            },
+            {
+                id: "assist",
+                label: this.rankingShowAssist ? "OCULTAR PRÁTICA" : "MOSTRAR PRÁTICA"
+            },
+            { id: "export", label: "EXPORTAR JSON" },
+            { id: "import", label: "IMPORTAR JSON" },
+            { id: "clear",  label: "LIMPAR LOCAL" }
+        ];
+    },
+
+    _rankingToolbarRects() {
+        const w = this.canvas.width;
+        const bw = 220;
+        const bh = 34;
+        const x = w - bw - 48;
+        const startY = 188;
+        const gap = 8;
+        const items = this._rankingToolbarItems();
+        const rects = {};
+        items.forEach((item, index) => {
+            rects[item.id] = {
+                x,
+                y: startY + index * (bh + gap),
+                w: bw,
+                h: bh
+            };
+        });
+        return rects;
+    },
+
+    _activateRankingToolbar(id) {
+        switch (id) {
+            case "sort":
+                this.rankingSortMode = this.rankingSortMode === "score" ? "time" : "score";
+                break;
+            case "assist":
+                this.rankingShowAssist = !this.rankingShowAssist;
+                break;
+            case "export":
+                this._exportRankingJson();
+                break;
+            case "import":
+                if (this.rankingImportInput) this.rankingImportInput.click();
+                break;
+            case "clear":
+                this._clearRankingLocal();
+                break;
+            default:
+                break;
+        }
+    },
+
+    _exportRankingJson() {
+        if (!this.rankingStore) return;
+        const blob = new Blob([this.rankingStore.exportJson()], { type: "application/json" });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = `logic-invaders-ranking-${new Date().toISOString().slice(0, 10)}.json`;
+        link.click();
+        URL.revokeObjectURL(url);
+        this.rankingStatus = "Ranking exportado para arquivo JSON.";
+    },
+
+    _importRankingFile(file) {
+        if (!this.rankingStore || !file) return;
+        const reader = new FileReader();
+        reader.onload = () => {
+            const payload = this.rankingStore.importJson(String(reader.result || ""));
+            this.rankingEntries = payload.entries;
+            this.rankingStatus = payload.result === "invalid"
+                ? "Arquivo JSON inválido."
+                : "Ranking importado e mesclado (melhores runs por piloto).";
+            if (payload.result === "invalid") {
+                this._log(this.rankingStatus, "error");
+            } else {
+                this._log(this.rankingStatus, "success");
+            }
+        };
+        reader.readAsText(file);
+    },
+
+    _clearRankingLocal() {
+        if (!this.rankingStore) return;
+        const ok = window.confirm(
+            "Limpar todo o ranking salvo neste navegador? Essa ação não pode ser desfeita."
+        );
+        if (!ok) return;
+        this.rankingEntries = this.rankingStore.clearLocal();
+        this.rankingStatus = "Ranking local limpo.";
+        this._log(this.rankingStatus, "system");
     },
 
     _formatRankingTime(seconds) {
@@ -2136,14 +2313,16 @@ const Game = {
         ctx.font       = '16px "Courier New", monospace';
         ctx.fillText("Você concluiu os 3 primeiros níveis da campanha.", w / 2, h / 2 - 98);
 
-        ctx.fillStyle = this.assistMode ? "#ffe14a" : "#00D9FF";
-        ctx.fillText(
-            this.assistMode
-                ? "Modo assistido: pontuação não entra no ranking."
-                : "Pontuação registrada no ranking da primeira parte.",
-            w / 2,
-            h / 2 - 68
+        ctx.fillStyle = this.rankingLastSubmitMessage ? "#00D9FF" : "#ffe14a";
+        ctx.font = '15px "Courier New", monospace';
+        const submitLines = this._wrapTextLines(
+            this.rankingLastSubmitMessage
+                || "Ao parar ou continuar depois, o ranking registra só quando a partida termina.",
+            62
         );
+        submitLines.forEach((line, i) => {
+            ctx.fillText(line, w / 2, h / 2 - 78 + i * 22);
+        });
 
         ctx.fillStyle = "rgba(230, 237, 247, 0.82)";
         ctx.fillText(
@@ -2211,18 +2390,21 @@ const Game = {
 
         this._drawRankingPreview(ctx);
 
-        if (this.lastEnteredName) {
+        if (this.pilotNameError) {
             ctx.save();
-            ctx.fillStyle = "rgba(0, 255, 204, 0.72)";
+            ctx.fillStyle = "#FF5F8F";
             ctx.font      = '13px "Courier New", monospace';
             ctx.textAlign = "center";
-            ctx.fillText(`último piloto: ${this.lastEnteredName}`, w / 2, h / 2 + 28);
+            ctx.fillText(this.pilotNameError, w / 2, h / 2 + 28);
             ctx.restore();
         }
     },
 
     _drawRankingPreview(ctx) {
+        const prevAssist = this.rankingShowAssist;
+        this.rankingShowAssist = false;
         const entries = this._sortedRankingEntries().slice(0, 3);
+        this.rankingShowAssist = prevAssist;
         const x = this.canvas.width - 320;
         const y = 160;
         const w = 250;
@@ -2241,7 +2423,7 @@ const Game = {
         ctx.fillStyle  = "#FF5F8F";
         ctx.font       = 'bold 16px "Courier New", monospace';
         ctx.textAlign  = "left";
-        ctx.fillText("// TOP RANKING", x + 14, y + 24);
+        ctx.fillText("// TOP GERAL", x + 14, y + 24);
 
         ctx.font = '13px "Courier New", monospace';
         if (entries.length === 0) {
@@ -2280,27 +2462,38 @@ const Game = {
 
         ctx.font      = '14px "Courier New", monospace';
         ctx.fillStyle = "rgba(230, 237, 247, 0.72)";
-        ctx.fillText("Entram apenas pilotos que concluíram os 3 primeiros níveis.", 60, 112);
-        ctx.fillText(this.rankingStatus, 60, 134);
-
-        const sortButton = this._rankingSortBtnRect();
-        const nextSortLabel = this.rankingSortMode === "score" ? "ORDENAR: TEMPO" : "ORDENAR: PONTOS";
-        this._drawButton(ctx, sortButton, nextSortLabel, this._pointInRect(this.mouseX, this.mouseY, sortButton), "#00FFCC");
+        ctx.fillText("Placar geral — melhores pontuações de todas as partidas.", 60, 112);
+        ctx.fillText("Nível alcançado não precisa ser alto; vale a pontuação.", 60, 128);
+        ctx.fillText(this.rankingStatus, 60, 150);
 
         ctx.font      = '13px "Courier New", monospace';
         ctx.fillStyle = this.rankingSortMode === "score" ? "#00D9FF" : "#00FFCC";
         ctx.fillText(
             this.rankingSortMode === "score"
-                ? "Classificação atual: maior pontuação, menor tempo em empate."
-                : "Classificação atual: menor tempo, maior pontuação em empate.",
+                ? "Ordem: maior pontuação; empate: nível mais alto, depois menor tempo."
+                : "Ordem: menor tempo; empate: maior pontuação e nível.",
             60,
-            156
+            172
         );
+        if (this.rankingShowAssist) {
+            ctx.fillStyle = "#ffe14a";
+            ctx.fillText("Incluindo runs do modo assistido (prática).", 60, 192);
+        }
 
-        const tableX = 80;
-        const tableY = 182;
-        const tableW = w - 160;
-        const rowH   = 46;
+        const toolbarItems = this._rankingToolbarItems();
+        const toolbarRects = this._rankingToolbarRects();
+        toolbarItems.forEach((item, index) => {
+            const rect = toolbarRects[item.id];
+            const active = this.rankingToolbarIndex === index;
+            const hover = this._pointInRect(this.mouseX, this.mouseY, rect);
+            const color = item.id === "clear" ? "#FF5F8F" : "#00FFCC";
+            this._drawButton(ctx, rect, item.label, active || hover, color);
+        });
+
+        const tableX = 60;
+        const tableY = 210;
+        const tableW = w - 320;
+        const rowH   = 40;
         const entries = this._sortedRankingEntries();
 
         ctx.strokeStyle = "#1f3559";
@@ -2309,38 +2502,57 @@ const Game = {
         ctx.strokeRect(tableX, tableY, tableW, rowH);
 
         ctx.fillStyle = "#00D9FF";
-        ctx.font      = 'bold 15px "Courier New", monospace';
-        ctx.fillText("POS",    tableX +  20, tableY + 29);
-        ctx.fillText("PILOTO", tableX + 100, tableY + 29);
-        ctx.fillText("NÍVEL",  tableX + 520, tableY + 29);
-        ctx.fillText("PTS",    tableX + 630, tableY + 29);
-        ctx.fillText("TEMPO",  tableX + 730, tableY + 29);
-        ctx.fillText("DATA",   tableX + 850, tableY + 29);
+        ctx.font      = 'bold 13px "Courier New", monospace';
+        ctx.fillText("POS",    tableX +  14, tableY + 26);
+        ctx.fillText("PILOTO", tableX +  56, tableY + 26);
+        ctx.fillText("NÍVEL",  tableX + 290, tableY + 26);
+        ctx.fillText("PTS",    tableX + 360, tableY + 26);
+        ctx.fillText("TEMPO",  tableX + 430, tableY + 26);
+        ctx.fillText("ERROS",  tableX + 510, tableY + 26);
+        ctx.fillText("VIDAS",  tableX + 580, tableY + 26);
+        ctx.fillText("TAG",    tableX + 650, tableY + 26);
+
+        const emptyMsg = "Nenhuma partida no ranking ainda. Jogue e termine com pelo menos 1 ponto.";
 
         if (entries.length === 0) {
             ctx.fillStyle = "rgba(230, 237, 247, 0.65)";
-            ctx.font      = '15px "Courier New", monospace';
-            ctx.fillText("Nenhuma primeira parte concluída ainda.", tableX + 20, tableY + 88);
+            ctx.font      = '14px "Courier New", monospace';
+            ctx.fillText(emptyMsg, tableX + 14, tableY + 72);
         } else {
             entries.forEach((entry, index) => {
                 const rowY = tableY + rowH + index * rowH;
-                ctx.fillStyle   = index % 2 === 0 ? "rgba(10, 20, 40, 0.56)" : "rgba(6, 12, 24, 0.72)";
-                ctx.strokeStyle = "rgba(31, 53, 89, 0.7)";
+                const isYou = this._isCurrentPilotEntry(entry);
+                ctx.fillStyle   = isYou
+                    ? "rgba(0, 255, 204, 0.14)"
+                    : (index % 2 === 0 ? "rgba(10, 20, 40, 0.56)" : "rgba(6, 12, 24, 0.72)");
+                ctx.strokeStyle = isYou ? "rgba(0, 255, 204, 0.45)" : "rgba(31, 53, 89, 0.7)";
                 ctx.fillRect(tableX, rowY, tableW, rowH);
                 ctx.strokeRect(tableX, rowY, tableW, rowH);
 
-                ctx.font = '14px "Courier New", monospace';
+                ctx.font = '13px "Courier New", monospace';
                 ctx.fillStyle = index === 0 ? "#ffe14a" : "#e6edf7";
-                ctx.fillText(`${index + 1}`,    tableX +  20, rowY + 29);
-                ctx.fillText(entry.name,        tableX + 100, rowY + 29);
+                ctx.fillText(`${index + 1}`, tableX + 14, rowY + 26);
+
+                let pilotLabel = entry.name;
+                if (isYou) pilotLabel += " ◀ você";
+                ctx.fillText(pilotLabel.slice(0, 22), tableX + 56, rowY + 26);
+
                 ctx.fillStyle = "#00FFCC";
-                ctx.fillText(`${entry.level}`,  tableX + 520, rowY + 29);
+                ctx.fillText(`${entry.level}`, tableX + 290, rowY + 26);
                 ctx.fillStyle = "#00D9FF";
-                ctx.fillText(`${entry.score}`,  tableX + 630, rowY + 29);
+                ctx.fillText(`${entry.score}`, tableX + 360, rowY + 26);
                 ctx.fillStyle = "#ffe14a";
-                ctx.fillText(this._formatRankingTime(entry.timeSeconds), tableX + 730, rowY + 29);
+                ctx.fillText(this._formatRankingTime(entry.timeSeconds), tableX + 430, rowY + 26);
+                ctx.fillStyle = "#FF5F8F";
+                ctx.fillText(`${entry.logicErrors ?? 0}`, tableX + 510, rowY + 26);
+                ctx.fillStyle = "#00FFCC";
+                const lives = Number.isFinite(entry.livesRemaining) ? entry.livesRemaining : "—";
+                ctx.fillText(`${lives}`, tableX + 580, rowY + 26);
+
+                const tags = [];
+                if (entry.assistMode) tags.push("PRÁT");
                 ctx.fillStyle = "rgba(230, 237, 247, 0.76)";
-                ctx.fillText(entry.date || "-", tableX + 850, rowY + 29);
+                ctx.fillText(tags.join("") || "OFICIAL", tableX + 650, rowY + 26);
             });
         }
         ctx.restore();
@@ -2465,11 +2677,14 @@ const Game = {
             "• Inimigo verdadeiro que cruza a zona crítica: -1 vida.",
             "• Você começa com 5 vidas e pode pausar no máximo 2 vezes por partida.",
             "• A sentença troca a cada 5 inimigos derrotados, com slow-motion.",
-            "• Modo assistido sinaliza naves corretas com ALVO, mas não registra ranking.",
+            "• Modo assistido sinaliza ALVO; runs vão ao ranking de prática (separado).",
             "• Item PERM: no modo normal, escolha um pacote verdadeiro; no assistido, instala direto.",
             "• As fases extras 4, 5 e 6 não têm aprimoramento fixo de fase.",
-            "• Só entra no ranking quem completar os 3 primeiros níveis.",
-            "• O ranking pode ser classificado por pontuação ou por menor tempo.",
+            "• Ranking geral: ao terminar a partida (game over, parar no nível 3 ou vencer).",
+            "• Entra quem tiver mais pontos — mesmo parando no nível 1.",
+            "• Guardamos as 40 melhores runs; a tela mostra o top 8.",
+            "• Erros lógicos, nível alcançado e vidas aparecem na tabela.",
+            "• Exportar/Importar JSON na tela de ranking para compartilhar em turma.",
             "• Do nível 3 em diante, naves abaixo da linha de segurança perdem o escudo lógico e podem ser limpas com [E]."
         ];
         ctx.font      = '13px "Courier New", monospace';
@@ -2618,6 +2833,25 @@ const Game = {
     /* ============================================================
        Helper: botão
        ============================================================ */
+    _wrapTextLines(text, maxChars = 48) {
+        const words = String(text || "").trim().split(/\s+/).filter(Boolean);
+        if (words.length === 0) return [""];
+
+        const lines = [];
+        let line = "";
+        for (const word of words) {
+            const next = line ? `${line} ${word}` : word;
+            if (next.length > maxChars && line) {
+                lines.push(line);
+                line = word;
+            } else {
+                line = next;
+            }
+        }
+        if (line) lines.push(line);
+        return lines;
+    },
+
     _drawWrappedText(ctx, text, x, y, maxWidth, lineHeight, options = {}) {
         const align = options.align || ctx.textAlign || "left";
         const hangingIndent = options.hangingIndent || 0;

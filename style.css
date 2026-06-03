@@ -317,10 +317,57 @@ kbd {
     border-radius: 4px;
     padding: 6px;
     display: flex;
-    justify-content: center;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
     box-shadow:
         0 0 50px rgba(0, 217, 255, 0.12),
         inset 0 0 30px rgba(0, 0, 0, 0.5);
+}
+
+.pilot-name-bar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 12px;
+    border: 1px dashed var(--border-glow);
+    border-radius: 4px;
+    background: rgba(10, 20, 40, 0.72);
+}
+
+.pilot-name-bar.is-hidden {
+    display: none;
+}
+
+.pilot-name-label {
+    font-size: 11px;
+    letter-spacing: 2px;
+    color: var(--text-dim);
+    flex-shrink: 0;
+}
+
+.pilot-name-input {
+    flex: 1;
+    min-width: 0;
+    max-width: 420px;
+    padding: 8px 12px;
+    font-family: inherit;
+    font-size: 15px;
+    letter-spacing: 1px;
+    color: var(--neon-green);
+    background: rgba(3, 6, 15, 0.9);
+    border: 1px solid var(--border-glow);
+    border-radius: 2px;
+    outline: none;
+}
+
+.pilot-name-input:focus {
+    border-color: var(--neon-blue);
+    box-shadow: 0 0 12px rgba(0, 217, 255, 0.35);
+}
+
+.pilot-name-input::placeholder {
+    color: var(--text-dim);
 }
 
 #game {
