@@ -466,6 +466,21 @@ const Game = {
     _dangerLineY()  { return this.canvas.height - 110; },
     _safetyLineY()  { return this._dangerLineY() - this.SAFETY_LINE_OFFSET; },
 
+    _enemyBottomY(enemy) {
+        return enemy.y + enemy.height / 2;
+    },
+
+    _isEnemyInCriticalZone(enemy) {
+        return this._enemyBottomY(enemy) >= this._dangerLineY();
+    },
+
+    _processCriticalZoneCrossings() {
+        const passed = this.spawner.enemiesPassed(this._dangerLineY());
+        if (passed.length > 0) {
+            this._handleEnemiesPassed(passed);
+        }
+    },
+
     _supportsUnshieldedFallback() {
         return this.level >= 3;
     },
@@ -1099,6 +1114,10 @@ const Game = {
             this.player.update(dt, this.canvas, this.bullets);
 
             this.spawner.update(scaledDt, this.bullets, this.expression);
+
+            // Zona crítica logo após mover inimigos — antes de projéteis e colisões
+            this._processCriticalZoneCrossings();
+
             this.powerups.update(scaledDt);
 
             // Bullets do jogador rodam em tempo real; bullets inimigas em slowmo
@@ -1116,16 +1135,8 @@ const Game = {
             this._cleanupBullets();
             this._cleanupFloatTexts();
 
-            // Colisões e pickups
             this._checkCollisions();
             this._checkPowerupPickup();
-
-            // Inimigos cruzaram a zona crítica?
-            const dangerY = this._dangerLineY();
-            const passed  = this.spawner.enemiesPassed(dangerY);
-            if (passed.length > 0) {
-                this._handleEnemiesPassed(passed);
-            }
 
             this._checkImpossibleState(dt);
             this._checkLevelComplete();
@@ -1374,7 +1385,8 @@ const Game = {
 
             const bb = bullet.getBounds();
             for (const enemy of this.spawner.enemies) {
-                if (!enemy.alive) continue;
+                if (!enemy.alive || enemy.criticalCrossHandled) continue;
+                if (this._isEnemyInCriticalZone(enemy)) continue;
                 if (rectIntersect(bb, enemy.getBounds())) {
                     bullet.alive = false;
                     this._handleEnemyHit(enemy);
@@ -1435,32 +1447,36 @@ const Game = {
      * - F (correto não atirar): mesmos pontos e progresso de um acerto lógico
      */
     _handleEnemiesPassed(passed) {
-        const shouldHaveHit = [];
-        const correctPass   = [];
+        let livesLost = 0;
 
         for (const enemy of passed) {
-            if (Logic.evaluate(this.expression, enemy.values)) {
-                shouldHaveHit.push(enemy);
-            } else {
-                correctPass.push(enemy);
-            }
+            if (!enemy.alive || enemy.criticalCrossHandled) continue;
+            enemy.criticalCrossHandled = true;
+
+            const isTrue = Logic.evaluate(this.expression, enemy.values) === true;
+            const detail = `${Logic.displayExpression(this.expression)} | ${Logic.formatVars(enemy.values)} → ${isTrue ? "V" : "F"}`;
+
             enemy.kill();
+
+            if (isTrue) {
+                livesLost += 1;
+                this._log(`✘ FALHA NA ZONA CRÍTICA  ${detail}`, "error");
+            } else {
+                this._addFloat(`+${this.POINTS_PER_HIT}`, enemy.x, enemy.y, "#00FFCC");
+                this._log(`✔ EVASÃO CORRETA  ${detail}`, "success");
+                this._onEnemyKilled();
+            }
         }
 
-        for (const enemy of correctPass) {
-            this._addFloat(`+${this.POINTS_PER_HIT}`, enemy.x, enemy.y, "#00FFCC");
-            const detail = `${Logic.displayExpression(this.expression)} | ${Logic.formatVars(enemy.values)} → F`;
-            this._log(`✔ EVASÃO CORRETA  ${detail}`, "success");
-            this._onEnemyKilled();
-        }
-
-        if (shouldHaveHit.length > 0) {
-            const n = shouldHaveHit.length;
-            this._loseLife(`Inimigo verdadeiro cruzou a zona crítica! (${n})`);
+        if (livesLost > 0) {
+            this._loseLife(`Inimigo verdadeiro cruzou a zona crítica! (${livesLost})`);
         }
     },
 
     _handleEnemyHit(enemy) {
+        // Na zona crítica só vale a regra de evasão (_handleEnemiesPassed)
+        if (this._isEnemyInCriticalZone(enemy)) return;
+
         // Inimigos sem escudo: kill direto (sem checagem lógica)
         if (enemy.isUnshielded) {
             this._destroyEnemy(enemy, "unshielded");

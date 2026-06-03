@@ -44,6 +44,7 @@ class Enemy {
         // Estado de "sem escudo lógico" (fallback do nível 3+)
         this.isUnshielded = false;
         this.unshieldedPhase = Math.random() * Math.PI * 2;
+        this.criticalCrossHandled = false;
     }
 
     update(dt) {
@@ -457,7 +458,11 @@ class EnemySpawner {
     }
 
     enemiesPassed(threshold) {
-        return this.enemies.filter(e => e.alive && e.y > threshold);
+        return this.enemies.filter(e => {
+            if (!e.alive || e.criticalCrossHandled) return false;
+            const bottom = e.y + e.height / 2;
+            return bottom >= threshold;
+        });
     }
 
     /* -------- Controle externo -------- */
