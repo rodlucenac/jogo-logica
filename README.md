@@ -4,13 +4,13 @@ Jogo educativo de lógica proposicional no estilo *Space Invaders*, em HTML5/Jav
 
 ## Integrantes
 
-Arthur Alves Patrício
-Gabriel Roma
-Guilherme Baltar
-João Guilherme
-Ramses Cordeiro
-Rodrigo Lucena
-Thiago Costa Queiroz
+- Arthur Alves Patrício;
+- Gabriel Roma;
+- Guilherme Baltar;
+- João Guilherme;
+- Ramses Cordeiro;
+- Rodrigo Lucena;
+- Thiago Costa Queiroz;
 
 ## Como rodar
 
