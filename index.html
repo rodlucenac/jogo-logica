@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Logic Invaders — Cyberpunk Edition</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="scanlines" aria-hidden="true"></div>
+
+    <div class="game-shell">
+        <header class="header">
+            <h1 class="logo">
+                <span class="logo-word">LOGIC</span>
+                <span class="logo-word accent">INVADERS</span>
+                <span class="version">// CYBERPUNK.EDITION.v3</span>
+            </h1>
+            <div class="header-stats">
+                <div class="level-badge">
+                    NÍVEL <span id="level">1</span>
+                </div>
+                <div class="score-badge" title="Pontuação">
+                    <span class="score-label">PTS</span>
+                    <span id="score">0</span>
+                </div>
+            </div>
+        </header>
+
+        <section class="expression-panel" aria-live="polite">
+            <div class="panel-label">// SENTENÇA ALVO</div>
+            <div class="expression" id="expression">—</div>
+            <div class="hint">
+                Atire em inimigos cujos valores tornem a sentença
+                <strong>VERDADEIRA</strong>. Analise A, B e C de cada nave!
+            </div>
+        </section>
+
+        <section class="stats-bar">
+            <div class="stat">
+                <span class="stat-label">VIDAS</span>
+                <span class="stat-value lives" id="lives">♥♥♥♥♥</span>
+            </div>
+            <div class="stat progress-stat">
+                <span class="stat-label">PROGRESSO DA FASE</span>
+                <span class="stat-value progress" id="progress">0/8</span>
+                <div class="progress-bar">
+                    <div class="progress-fill" id="progressFill"></div>
+                </div>
+            </div>
+            <div class="stat upgrades-stat">
+                <span class="stat-label">UPGRADES COLETADOS</span>
+                <span class="stat-value upgrades" id="upgradeHistory">—</span>
+            </div>
+        </section>
+
+        <section class="game-area">
+            <canvas id="game" width="1100" height="720" tabindex="0"></canvas>
+        </section>
+
+        <section class="console-panel">
+            <div class="panel-label">// CONSOLE LÓGICO</div>
+            <div class="log" id="log" aria-live="polite"></div>
+        </section>
+    </div>
+
+    <div class="game-over hidden" id="gameOver" role="dialog" aria-modal="true">
+        <div class="game-over-box">
+            <div class="game-over-header">!! SYSTEM FAILURE !!</div>
+            <h2>GAME OVER</h2>
+            <div class="final-stats">
+                <div>Pontuação final: <span id="finalScore">0</span></div>
+                <div>Nível alcançado: <span id="finalLevel">1</span></div>
+            </div>
+            <div class="game-over-buttons">
+                <button id="restartBtn" class="btn-restart btn-primary">↻ TENTAR NOVAMENTE</button>
+                <button id="menuBtn" class="btn-restart btn-secondary">⌂ MENU PRINCIPAL</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="logic.js"></script>
+    <script src="bullets.js"></script>
+    <script src="player.js"></script>
+    <script src="enemies.js"></script>
+    <script src="powerups.js"></script>
+    <script src="ranking-config.js"></script>
+    <script src="ranking-service.js"></script>
+    <script src="game.js"></script>
+</body>
+</html>
