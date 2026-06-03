@@ -1068,8 +1068,7 @@ const Game = {
             const dangerY = this._dangerLineY();
             const passed  = this.spawner.enemiesPassed(dangerY);
             if (passed.length > 0) {
-                for (const e of passed) e.alive = false;
-                this._loseLife(`Inimigo cruzou a zona crítica! (${passed.length})`);
+                this._handleEnemiesPassed(passed);
             }
 
             this._checkImpossibleState(dt);
@@ -1355,6 +1354,37 @@ const Game = {
             this._addFloat(`+ ${label}`, this.player.x, this.player.y - 30, color);
             this._log(`▲ Power-up: ${label}`, "success");
             this._refreshHud();
+        }
+    },
+
+    /**
+     * Inimigo cruzou a linha de perigo. Avalia a sentença com os valores da nave:
+     * - V (deveria ter sido destruída): -1 vida
+     * - F (correto não atirar): mesmos pontos e progresso de um acerto lógico
+     */
+    _handleEnemiesPassed(passed) {
+        const shouldHaveHit = [];
+        const correctPass   = [];
+
+        for (const enemy of passed) {
+            if (Logic.evaluate(this.expression, enemy.values)) {
+                shouldHaveHit.push(enemy);
+            } else {
+                correctPass.push(enemy);
+            }
+            enemy.kill();
+        }
+
+        for (const enemy of correctPass) {
+            this._addFloat(`+${this.POINTS_PER_HIT}`, enemy.x, enemy.y, "#00FFCC");
+            const detail = `${Logic.displayExpression(this.expression)} | ${Logic.formatVars(enemy.values)} → F`;
+            this._log(`✔ EVASÃO CORRETA  ${detail}`, "success");
+            this._onEnemyKilled();
+        }
+
+        if (shouldHaveHit.length > 0) {
+            const n = shouldHaveHit.length;
+            this._loseLife(`Inimigo verdadeiro cruzou a zona crítica! (${n})`);
         }
     },
 
@@ -2431,7 +2461,8 @@ const Game = {
             "• Atire APENAS em inimigos que tornam a sentença VERDADEIRA.",
             "• Acerto certo: +10 pts, inimigo é destruído.",
             "• Acerto errado: -1 vida.",
-            "• Inimigos cruzando a zona crítica: -1 vida.",
+            "• Inimigo falso que cruza a zona crítica: +10 pts (evasão correta).",
+            "• Inimigo verdadeiro que cruza a zona crítica: -1 vida.",
             "• Você começa com 5 vidas e pode pausar no máximo 2 vezes por partida.",
             "• A sentença troca a cada 5 inimigos derrotados, com slow-motion.",
             "• Modo assistido sinaliza naves corretas com ALVO, mas não registra ranking.",
